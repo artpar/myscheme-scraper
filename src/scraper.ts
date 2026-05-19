@@ -144,7 +144,7 @@ class MyschemeScraper {
       
       // Use page.evaluate to run browser code
       const lastPage = await page.evaluate(() => {
-        const paginationLinks = document.querySelectorAll('ul li');
+        const paginationLinks = Array.from(document.querySelectorAll('ul li'));
         let maxPage = 1;
         for (const li of paginationLinks) {
           const text = li.textContent?.trim() || '';
