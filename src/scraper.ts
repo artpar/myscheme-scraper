@@ -8,7 +8,6 @@ import {
   Scheme,
   SchemeListItem,
   ScrapingState,
-  FAQ,
   DEFAULT_CONFIG,
   ScraperConfig
 } from './types';
@@ -45,7 +44,7 @@ class MyschemeScraper {
     }
     return {
       currentPage: 1,
-      totalPages: 471, // Will be updated after first page load
+      totalPages: 471,
       scrapedSchemeIds: [],
       lastScrapedAt: new Date().toISOString(),
       errors: [],
@@ -69,14 +68,12 @@ class MyschemeScraper {
     await this.initialize();
     
     try {
-      // Get total pages from first load
       await this.updateTotalPages();
       
       const totalSchemes = this.state.totalPages * this.config.resultsPerPage;
       console.log(`Total pages: ${this.state.totalPages}`);
       console.log(`Estimated schemes: ${totalSchemes}`);
       
-      // Scrape each page
       for (let page = this.state.currentPage; page <= this.state.totalPages; page++) {
         this.state.currentPage = page;
         logProgress(page, this.state.totalPages, 'pages');
@@ -85,7 +82,6 @@ class MyschemeScraper {
           const schemeItems = await this.scrapePage(page);
           console.log(`Found ${schemeItems.length} schemes on page ${page}`);
           
-          // Scrape each scheme detail
           for (const item of schemeItems) {
             if (this.state.scrapedSchemeIds.includes(item.id)) {
               console.log(`Skipping already scraped: ${item.title}`);
@@ -97,37 +93,36 @@ class MyschemeScraper {
               this.schemes.push(scheme);
               this.state.scrapedSchemeIds.push(item.id);
               
-              // Save progress periodically
               if (this.schemes.length % 50 === 0) {
                 this.saveProgress();
               }
               
-              // Rate limiting
               await delay(this.isFastMode ? this.config.fastDelayMs : this.config.delayMs);
-            } catch (error: any) {
-              console.error(`Error scraping scheme ${item.id}:`, error.message);
+            } catch (error: unknown) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.error(`Error scraping scheme ${item.id}:`, message);
               this.state.errors.push({
                 page,
                 schemeId: item.id,
                 url: item.url,
-                error: error.message,
+                error: message,
                 timestamp: new Date().toISOString(),
               });
             }
           }
           
           this.saveProgress();
-        } catch (error: any) {
-          console.error(`Error on page ${page}:`, error.message);
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`Error on page ${page}:`, message);
           this.state.errors.push({
             page,
-            error: error.message,
+            error: message,
             timestamp: new Date().toISOString(),
           });
         }
       }
       
-      // Final save
       this.saveFinalResults();
       
     } finally {
@@ -147,7 +142,6 @@ class MyschemeScraper {
     try {
       await page.goto(this.config.searchUrl, { waitUntil: 'networkidle' });
       
-      // Find the last page number in pagination
       const lastPage = await page.evaluate(() => {
         const paginationLinks = document.querySelectorAll('ul li');
         let maxPage = 1;
@@ -176,37 +170,34 @@ class MyschemeScraper {
       const url = pageNum === 1 ? this.config.searchUrl : `${this.config.searchUrl}?page=${pageNum}`;
       await page.goto(url, { waitUntil: 'networkidle' });
       
-      // Wait for scheme cards to load
       await page.waitForSelector('#scheme-name-0', { timeout: 10000 }).catch(() => {
         console.log('No scheme cards found on page');
       });
       
-      // Extract scheme cards
-      const cards = await page.$$('[id^="scheme-name-"]');
+      const cards = await page.locator('[id^="scheme-name-"]').all();
       
       for (let i = 0; i < cards.length; i++) {
         try {
           const card = cards[i];
-          const link = await card.$('a');
-          const titleSpan = await card.$('span');
+          const link = card.locator('a');
+          const titleSpan = card.locator('span');
           
-          if (link && titleSpan) {
-            const href = await link.getAttribute('href');
-            const title = await titleSpan.textContent();
-            
-            if (href && title) {
-              const id = generateSchemeId(href);
-              items.push({
-                id,
-                title: cleanText(title),
-                url: href.startsWith('http') ? href : `${this.config.baseUrl}${href}`,
-                ministry: '',
-                tags: [],
-              });
-            }
+          const href = await link.getAttribute('href');
+          const title = await titleSpan.textContent();
+          
+          if (href && title) {
+            const id = generateSchemeId(href);
+            items.push({
+              id,
+              title: cleanText(title),
+              url: href.startsWith('http') ? href : `${this.config.baseUrl}${href}`,
+              ministry: '',
+              tags: [],
+            });
           }
-        } catch (error: any) {
-          console.error(`Error extracting card ${i}:`, error.message);
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`Error extracting card ${i}:`, message);
         }
       }
       
@@ -223,7 +214,6 @@ class MyschemeScraper {
     try {
       await page.goto(item.url, { waitUntil: 'networkidle' });
       
-      // Extract all sections
       const [title, ministry, tags, description, benefits, eligibility, exclusions, applicationProcess, documentsRequired, faqs] = await Promise.all([
         this.extractTitle(page),
         this.extractMinistry(page),
@@ -259,7 +249,7 @@ class MyschemeScraper {
 
   private async extractTitle(page: Page): Promise<string> {
     try {
-      const titleEl = await page.$('h1');
+      const titleEl = page.locator('h1');
       return titleEl ? cleanText(await titleEl.textContent() || '') : '';
     } catch {
       return '';
@@ -268,7 +258,7 @@ class MyschemeScraper {
 
   private async extractMinistry(page: Page): Promise<string> {
     try {
-      const ministryEl = await page.$('h3');
+      const ministryEl = page.locator('h3');
       return ministryEl ? cleanText(await ministryEl.textContent() || '') : '';
     } catch {
       return '';
@@ -277,10 +267,10 @@ class MyschemeScraper {
 
   private async extractTags(page: Page): Promise<string[]> {
     try {
-      const tagsContainer = await page.$('.mb-2.md\\:mb-0.w-full');
-      if (!tagsContainer) return [];
+      const tagsContainer = page.locator('.mb-2.md\\:mb-0.w-full');
+      if (!await tagsContainer.count()) return [];
       
-      const tagButtons = await tagsContainer.$$('[role="button"]');
+      const tagButtons = await page.locator('.mb-2.md\\:mb-0.w-full [role="button"]').all();
       const tags: string[] = [];
       
       for (const btn of tagButtons) {
@@ -296,14 +286,13 @@ class MyschemeScraper {
 
   private async extractSection(page: Page, sectionId: string): Promise<string[]> {
     try {
-      const section = await page.$(sectionId);
-      if (!section) return [];
+      const section = page.locator(sectionId);
+      if (!await section.count()) return [];
       
-      // Extract from Slate editor
-      const slateEditor = await section.$('.markdown-options');
-      if (!slateEditor) return [];
+      const slateEditor = section.locator('.markdown-options');
+      if (!await slateEditor.count()) return [];
       
-      const items = await slateEditor.$$('[data-slate-node="element"]');
+      const items = await slateEditor.locator('[data-slate-node="element"]').all();
       const textItems: string[] = [];
       
       for (const item of items) {
@@ -319,10 +308,9 @@ class MyschemeScraper {
     }
   }
 
-  private async extractSlateText(element: any): Promise<string> {
+  private async extractSlateText(locator: any): Promise<string> {
     try {
-      // Try to find text in Slate leaf nodes
-      const leaves = await element.$$('[data-slate-string="true"]');
+      const leaves = await locator.locator('[data-slate-string="true"]').all();
       if (leaves.length > 0) {
         const texts: string[] = [];
         for (const leaf of leaves) {
@@ -332,8 +320,7 @@ class MyschemeScraper {
         return texts.join('');
       }
       
-      // Fallback: get all text content
-      return await element.textContent() || '';
+      return await locator.textContent() || '';
     } catch {
       return '';
     }
@@ -341,19 +328,17 @@ class MyschemeScraper {
 
   private async extractApplicationProcess(page: Page): Promise<{ mode: string; steps: string[] }> {
     try {
-      const section = await page.$('#application-process');
-      if (!section) return { mode: '', steps: [] };
+      const section = page.locator('#application-process');
+      if (!await section.count()) return { mode: '', steps: [] };
       
-      // Extract mode
-      const modeEl = await section.$('.capitalize');
-      const mode = modeEl ? cleanText(await modeEl.textContent() || '') : 'Online';
+      const modeEl = section.locator('.capitalize');
+      const mode = modeEl.count() ? cleanText(await modeEl.textContent() || '') : 'Online';
       
-      // Extract steps from Slate editor
-      const slateEditor = await section.$('.markdown-options');
+      const slateEditor = section.locator('.markdown-options');
       const steps: string[] = [];
       
-      if (slateEditor) {
-        const items = await slateEditor.$$('[data-slate-node="element"]');
+      if (await slateEditor.count()) {
+        const items = await slateEditor.locator('[data-slate-node="element"]').all();
         for (const item of items) {
           const text = await this.extractSlateText(item);
           if (text && text.trim()) {
@@ -372,26 +357,26 @@ class MyschemeScraper {
     return this.extractSection(page, '#documents-required');
   }
 
-  private async extractFaqs(page: Page): Promise<FAQ[]> {
+  private async extractFaqs(page: Page): Promise<{ question: string; answer: string }[]> {
     try {
-      const section = await page.$('#faqs');
-      if (!section) return [];
+      const section = page.locator('#faqs');
+      if (!await section.count()) return [];
       
-      const faqs: FAQ[] = [];
-      const faqItems = await section.$$('.py-4.first\\:pt-0.last\\:pb-0');
+      const faqs: { question: string; answer: string }[] = [];
+      const faqItems = await section.locator('.py-4').all();
       
       for (const faqItem of faqItems) {
-        const questionEl = await faqItem.$('p');
-        const answerEl = await faqItem.$('.rounded-b');
+        const questionEl = faqItem.locator('p');
+        const answerEl = faqItem.locator('.rounded-b');
         
-        if (questionEl) {
+        if (await questionEl.count()) {
           const question = cleanText(await questionEl.textContent() || '');
           let answer = '';
           
-          if (answerEl) {
-            const slateEditor = await answerEl.$('.markdown-options');
-            if (slateEditor) {
-              const leaves = await slateEditor.$$('[data-slate-string="true"]');
+          if (await answerEl.count()) {
+            const slateEditor = answerEl.locator('.markdown-options');
+            if (await slateEditor.count()) {
+              const leaves = await slateEditor.locator('[data-slate-string="true"]').all();
               const answerParts: string[] = [];
               for (const leaf of leaves) {
                 const text = await leaf.textContent();
@@ -423,16 +408,10 @@ class MyschemeScraper {
     console.log(`Total schemes scraped: ${this.schemes.length}`);
     console.log(`Errors encountered: ${this.state.errors.length}`);
     
-    // Save JSON
     saveSchemesJson(this.schemes);
-    
-    // Save CSV
     saveSchemesCsv(this.schemes);
-    
-    // Save final state
     this.saveProgress();
     
-    // Save errors
     if (this.state.errors.length > 0) {
       ensureOutputDir();
       const fs = require('fs');
@@ -444,7 +423,6 @@ class MyschemeScraper {
   }
 }
 
-// Main execution
 async function main() {
   const args = process.argv.slice(2);
   const isFast = args.includes('--fast');
@@ -458,10 +436,8 @@ async function main() {
   try {
     const schemes = await scraper.scrape();
     console.log(`\nFinal count: ${schemes.length} schemes`);
-    process.exit(0);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Fatal error:', error);
-    process.exit(1);
   }
 }
 
