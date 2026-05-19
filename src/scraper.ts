@@ -142,6 +142,7 @@ class MyschemeScraper {
     try {
       await page.goto(this.config.searchUrl, { waitUntil: 'networkidle' });
       
+      // Use page.evaluate to run browser code
       const lastPage = await page.evaluate(() => {
         const paginationLinks = document.querySelectorAll('ul li');
         let maxPage = 1;
@@ -214,7 +215,7 @@ class MyschemeScraper {
     try {
       await page.goto(item.url, { waitUntil: 'networkidle' });
       
-      const [title, ministry, tags, description, benefits, eligibility, exclusions, applicationProcess, documentsRequired, faqs] = await Promise.all([
+      const [title, ministry, tags, descriptionArray, benefits, eligibility, exclusions, applicationProcess, documentsRequired, faqs] = await Promise.all([
         this.extractTitle(page),
         this.extractMinistry(page),
         this.extractTags(page),
@@ -226,6 +227,9 @@ class MyschemeScraper {
         this.extractDocumentsRequired(page),
         this.extractFaqs(page),
       ]);
+      
+      // Join description array into a single string
+      const description = descriptionArray.join('\n\n');
       
       return {
         id: item.id,
@@ -332,7 +336,8 @@ class MyschemeScraper {
       if (!await section.count()) return { mode: '', steps: [] };
       
       const modeEl = section.locator('.capitalize');
-      const mode = modeEl.count() ? cleanText(await modeEl.textContent() || '') : 'Online';
+      const modeCount = await modeEl.count();
+      const mode = modeCount > 0 ? cleanText(await modeEl.textContent() || '') : 'Online';
       
       const slateEditor = section.locator('.markdown-options');
       const steps: string[] = [];
