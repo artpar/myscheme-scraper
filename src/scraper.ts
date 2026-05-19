@@ -92,6 +92,7 @@ class MyschemeScraper {
               const scheme = await this.scrapeSchemeDetail(item);
               this.schemes.push(scheme);
               this.state.scrapedSchemeIds.push(item.id);
+              console.log(`  Scraped: ${scheme.title}`);
               
               if (this.schemes.length % 50 === 0) {
                 this.saveProgress();
@@ -142,7 +143,6 @@ class MyschemeScraper {
     try {
       await page.goto(this.config.searchUrl, { waitUntil: 'networkidle' });
       
-      // Use page.evaluate to run browser code
       const lastPage = await page.evaluate(() => {
         const paginationLinks = Array.from(document.querySelectorAll('ul li'));
         let maxPage = 1;
@@ -213,22 +213,23 @@ class MyschemeScraper {
     const page = await this.browser!.newPage();
     
     try {
-      await page.goto(item.url, { waitUntil: 'networkidle' });
+      await page.goto(item.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForTimeout(2000); // Wait for dynamic content
       
+      // Extract with individual timeouts to prevent hanging
       const [title, ministry, tags, descriptionArray, benefits, eligibility, exclusions, applicationProcess, documentsRequired, faqs] = await Promise.all([
-        this.extractTitle(page),
-        this.extractMinistry(page),
-        this.extractTags(page),
-        this.extractSection(page, '#details'),
-        this.extractSection(page, '#benefits'),
-        this.extractSection(page, '#eligibility'),
-        this.extractSection(page, '#exclusions'),
-        this.extractApplicationProcess(page),
-        this.extractDocumentsRequired(page),
-        this.extractFaqs(page),
+        this.extractWithTimeout(this.extractTitle(page), 5000),
+        this.extractWithTimeout(this.extractMinistry(page), 5000),
+        this.extractWithTimeout(this.extractTags(page), 5000),
+        this.extractWithTimeout(this.extractSection(page, '#details'), 10000),
+        this.extractWithTimeout(this.extractSection(page, '#benefits'), 10000),
+        this.extractWithTimeout(this.extractSection(page, '#eligibility'), 10000),
+        this.extractWithTimeout(this.extractSection(page, '#exclusions'), 10000),
+        this.extractWithTimeout(this.extractApplicationProcess(page), 10000),
+        this.extractWithTimeout(this.extractDocumentsRequired(page), 10000),
+        this.extractWithTimeout(this.extractFaqs(page), 10000),
       ]);
       
-      // Join description array into a single string
       const description = descriptionArray.join('\n\n');
       
       return {
@@ -251,10 +252,21 @@ class MyschemeScraper {
     }
   }
 
+  private async extractWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => 
+        setTimeout(() => reject(new Error('Extraction timeout')), ms)
+      )
+    ]).catch(() => [] as any);
+  }
+
   private async extractTitle(page: Page): Promise<string> {
     try {
       const titleEl = page.locator('h1');
-      return titleEl ? cleanText(await titleEl.textContent() || '') : '';
+      const count = await titleEl.count();
+      if (count === 0) return '';
+      return cleanText(await titleEl.textContent() || '');
     } catch {
       return '';
     }
@@ -263,7 +275,12 @@ class MyschemeScraper {
   private async extractMinistry(page: Page): Promise<string> {
     try {
       const ministryEl = page.locator('h3');
-      return ministryEl ? cleanText(await ministryEl.textContent() || '') : '';
+      const count = await ministryEl.count();
+      if (count === 0) return '';
+      const text = await ministryEl.textContent() || '';
+      // Filter out error messages
+      if (text.includes('Something went wrong') || text.includes('error')) return '';
+      return cleanText(text);
     } catch {
       return '';
     }
@@ -271,17 +288,12 @@ class MyschemeScraper {
 
   private async extractTags(page: Page): Promise<string[]> {
     try {
-      const tagsContainer = page.locator('.mb-2.md\\:mb-0.w-full');
-      if (!await tagsContainer.count()) return [];
-      
       const tagButtons = await page.locator('.mb-2.md\\:mb-0.w-full [role="button"]').all();
       const tags: string[] = [];
-      
       for (const btn of tagButtons) {
         const tag = await btn.textContent();
         if (tag) tags.push(cleanText(tag));
       }
-      
       return tags;
     } catch {
       return [];
@@ -291,10 +303,12 @@ class MyschemeScraper {
   private async extractSection(page: Page, sectionId: string): Promise<string[]> {
     try {
       const section = page.locator(sectionId);
-      if (!await section.count()) return [];
+      const sectionCount = await section.count();
+      if (sectionCount === 0) return [];
       
       const slateEditor = section.locator('.markdown-options');
-      if (!await slateEditor.count()) return [];
+      const slateCount = await slateEditor.count();
+      if (slateCount === 0) return [];
       
       const items = await slateEditor.locator('[data-slate-node="element"]').all();
       const textItems: string[] = [];
@@ -323,7 +337,6 @@ class MyschemeScraper {
         }
         return texts.join('');
       }
-      
       return await locator.textContent() || '';
     } catch {
       return '';
@@ -333,16 +346,18 @@ class MyschemeScraper {
   private async extractApplicationProcess(page: Page): Promise<{ mode: string; steps: string[] }> {
     try {
       const section = page.locator('#application-process');
-      if (!await section.count()) return { mode: '', steps: [] };
+      const sectionCount = await section.count();
+      if (sectionCount === 0) return { mode: 'Online', steps: [] };
       
       const modeEl = section.locator('.capitalize');
       const modeCount = await modeEl.count();
       const mode = modeCount > 0 ? cleanText(await modeEl.textContent() || '') : 'Online';
       
       const slateEditor = section.locator('.markdown-options');
+      const slateCount = await slateEditor.count();
       const steps: string[] = [];
       
-      if (await slateEditor.count()) {
+      if (slateCount > 0) {
         const items = await slateEditor.locator('[data-slate-node="element"]').all();
         for (const item of items) {
           const text = await this.extractSlateText(item);
@@ -365,7 +380,8 @@ class MyschemeScraper {
   private async extractFaqs(page: Page): Promise<{ question: string; answer: string }[]> {
     try {
       const section = page.locator('#faqs');
-      if (!await section.count()) return [];
+      const sectionCount = await section.count();
+      if (sectionCount === 0) return [];
       
       const faqs: { question: string; answer: string }[] = [];
       const faqItems = await section.locator('.py-4').all();
@@ -374,26 +390,29 @@ class MyschemeScraper {
         const questionEl = faqItem.locator('p');
         const answerEl = faqItem.locator('.rounded-b');
         
-        if (await questionEl.count()) {
-          const question = cleanText(await questionEl.textContent() || '');
-          let answer = '';
-          
-          if (await answerEl.count()) {
-            const slateEditor = answerEl.locator('.markdown-options');
-            if (await slateEditor.count()) {
-              const leaves = await slateEditor.locator('[data-slate-string="true"]').all();
-              const answerParts: string[] = [];
-              for (const leaf of leaves) {
-                const text = await leaf.textContent();
-                if (text) answerParts.push(text);
-              }
-              answer = cleanText(answerParts.join(''));
+        const qCount = await questionEl.count();
+        if (qCount === 0) continue;
+        
+        const question = cleanText(await questionEl.textContent() || '');
+        let answer = '';
+        
+        const aCount = await answerEl.count();
+        if (aCount > 0) {
+          const slateEditor = answerEl.locator('.markdown-options');
+          const sCount = await slateEditor.count();
+          if (sCount > 0) {
+            const leaves = await slateEditor.locator('[data-slate-string="true"]').all();
+            const answerParts: string[] = [];
+            for (const leaf of leaves) {
+              const text = await leaf.textContent();
+              if (text) answerParts.push(text);
             }
+            answer = cleanText(answerParts.join(''));
           }
-          
-          if (question) {
-            faqs.push({ question, answer });
-          }
+        }
+        
+        if (question) {
+          faqs.push({ question, answer });
         }
       }
       
